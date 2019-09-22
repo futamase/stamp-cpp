@@ -1,0 +1,21 @@
+code|g++| 
+----+---+--vacation----
+  o | - | action.h
+  o | o | client.c
+  o | - | client.h
+  x | o | customer.c
+  o | - | customer.h
+  x | o | manager.c
+  o | - | manager.h
+  x | - | operation.h
+  x | o | reservation.c
+  x | - | reservation.h
+  x | o | vacation.c
+----+---|--lib---------
+  o | o | thread.c
+  o | o | list.c
+  o | - | random.h
+  o | o | pair.h
+  o | o | mt19937.h
+  o | o | rbtree.cpp 
+  o | - | types.h

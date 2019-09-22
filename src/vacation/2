@@ -1,0 +1,11 @@
+Non-option argument: log
+Usage: ./vacation [options]
+
+Options:                                             (defaults)
+
+    c <UINT>   Number of [c]lients                   (1)
+    n <UINT>   [n]umber of user queries/transaction  (10)
+    q <UINT>   Percentage of relations [q]ueried     (90)
+    r <UINT>   Number of possible [r]elations        (65536)
+    t <UINT>   Number of [t]ransactions              (67108864)
+    u <UINT>   Percentage of [u]ser transactions     (80)
