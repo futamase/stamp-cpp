@@ -6,261 +6,119 @@
 #include <mutex>
 #include <unordered_map>
 #include <list>
-#include <cstring>
 #include <stdexcept>
 
-#include "tmalloc.hpp"
+#include "TxDescriptor.hpp"
+#include "tx_exception.hpp"
 
-//extern "C" {
-//#include <umalloc.h>
-//}
-
-struct 
-
-
-class LockVar {
-    uintptr_t lock = 0;
+class STM {
+    static std::vector<TxDescriptor> desc_table;
     public:
-    bool TestWriteBit() const { return (lock & 1); } 
-    void SetWriteBit() { lock |= 1; }
-    void ClearWriteBit() { lock &= ~1; }
-    void ClearWriteBitAndIncTimestamp() { lock = (lock & ~1) + 2; }
-
-    int Readers() const { return lock >> 1; }
-    void IncReaders() { lock += 2; }
-    void DecReaders() { lock -= 2; } 
-    uintptr_t WriterID() const { return lock >> 1; }
-
-    uintptr_t operator*() const { return lock; }
-};
-class GlobalLock {
-    static const unsigned long TABLE_SIZE = 1 << 20;
-    public:
-    static LockVar& AddrToLockVar(void* addr) {
-      static LockVar vars[TABLE_SIZE];
-      int idx = (reinterpret_cast<uintptr_t>(addr) >> 3) & (TABLE_SIZE - 1);
-      return vars[idx];
-    }
-};
-static std::mutex alloc_lock;
-static std::mutex meta_mutex;
-
-struct alignas(64) TxDescriptor {
-    enum class Type {
-        Read, Write
-    };
-    struct LogEntry {
-        void* addr;
-        Type type;
-        char value[128];
-        uintptr_t old_version;
-        std::size_t size;
-    };
-    std::unordered_map<uintptr_t, LogEntry> dataset;
-    TMAllocList allocations, frees;
-    unsigned depth = 0;
-    int my_tid;
-
-    TxDescriptor() : allocations(1 << 5), frees(1 << 5) {}
-
-    bool validate() {
-      bool success = true;
-      for(auto& entry : dataset) {
-        auto& meta = GlobalLock::AddrToLockVar(entry.second.addr);
-        {
-          std::lock_guard<std::mutex> guard(meta_mutex);
-          if(entry.second.type == Type::Read) {
-            if(*meta != entry.second.old_version) {
-              std::cout << "version check failed: addr=" << entry.second.addr << " meta=" << *meta << std::endl;
-              success = false;
-            }
-          }
-        } // lock scope
-        if(!success) return false;
-      } // for scope
-      return true;
-    }
-    void reset(bool succeeded) {
-        for(auto& entry : dataset) {
-            auto& meta = GlobalLock::AddrToLockVar(entry.second.addr);
-            std::lock_guard<std::mutex> guard(meta_mutex);
-            if(entry.second.type == Type::Read) {
-                // nothing
-            } else {
-                if(succeeded) {
-                    meta.ClearWriteBitAndIncTimestamp();
-                } else {
-                    memcpy(entry.second.addr, entry.second.value, entry.second.size);
-                    meta.ClearWriteBit();
-                }
-            }
-        }
-        if(succeeded) {
-          frees.ReleaseAllForward(TMAllocList::visitor_type{});
-        } else {
-          allocations.ReleaseAllReverse(TMAllocList::visitor_type{});
-        }
-        frees.clear();
-        allocations.clear();
-        dataset.clear();
-    }
-
-    bool open_for_read(void* addr) {
-        auto entry = dataset.find(reinterpret_cast<uintptr_t>(addr));
-        if(entry != dataset.end())  {
-            return true;
-        }
-
-        bool result = false; 
-        {
-            std::lock_guard<std::mutex> guard(meta_mutex);
-
-            auto& meta = GlobalLock::AddrToLockVar(addr);
-
-            if(!meta.TestWriteBit()) {
-              auto& new_entry = dataset[reinterpret_cast<uintptr_t>(addr)];
-              new_entry.addr = addr;  
-              new_entry.old_version = *meta;
-              new_entry.type = Type::Read;
-
-              result = true;
-            } else {
-            }
-        }
-        return result;
-    }
-    bool open_for_write(void* addr, std::size_t size) {
-        auto entry = dataset.find(reinterpret_cast<uintptr_t>(addr));
-        if(entry != dataset.end()) {
-            if(entry->second.type == Type::Write) {
-                return true;
-            }
-        }
-
-        bool result;
-        {
-            std::lock_guard<std::mutex> guard(meta_mutex);
-
-            auto& meta = GlobalLock::AddrToLockVar(addr);
-
-            if(!meta.TestWriteBit()) 
-                result = true;
-
-            if(result && entry != dataset.end()) {
-                if(entry->second.type == Type::Read && *meta != entry->second.old_version) 
-                    result = false;
-            }
-
-            if(result) {
-                meta.SetWriteBit();
-
-                // 新しいエントリが生成される可能性もある
-                auto& entry = dataset[reinterpret_cast<uintptr_t>(addr)];
-                entry.addr = addr;
-                entry.type = Type::Write;
-                entry.size = size;
-                std::memcpy(entry.value, addr, size);
-            }
-        }
-        return result;
-    }
-    static TxDescriptor& Get(int tid) {
-      static std::unordered_map<int, TxDescriptor> desc_table;
+    static TxDescriptor& GetDesc(int tid) {
       auto& e = desc_table[tid];
       e.my_tid = tid;
       return e;
     }
-};
-
-class STM {
-    public:
+    static void Init(int numThreads) {
+      desc_table.resize(numThreads);
+      for(size_t tid = 0; tid < desc_table.size(); tid++)
+        desc_table[tid].my_tid = tid;
+    }
+    static void Exit() {
+      for(size_t tid = 0; tid < desc_table.size(); tid++) {
+        fprintf(stderr, "stats[tid:%ld] %s\n", tid, desc_table[tid].stats.concat_all_stats().c_str());
+      }
+    }
     template<typename T>
     static T Load(int tid, T* addr) {
         static_assert(std::is_scalar<T>::value == true, "stm_write cannot use non scalar type");
-        //std::cout << __func__ << " : addr=" << addr << std::endl;
-        auto& tx_desc = TxDescriptor::Get(tid);
+        auto& tx_desc = GetDesc(tid);
 
         bool success = tx_desc.open_for_read(addr);
         if(success) {
           return *addr;
         } else {
           tx_desc.reset(false);
-          std::cerr << "Aborted by:open_for_read... addr:" << addr << std::endl;
-          throw std::runtime_error("Load");
+          // fprintf(stderr, "Aborted by:open_for_read... addr:%p\n", addr);
+          throw inter_tx_exception("Load", tid, addr);
         }
         
         return (T)0;
     }
     template<typename T>
     static void Store(int tid, T* addr, T val) {
-        // std::cout << __func__ << " : addr="<<addr<< std::endl;
-      auto& tx_desc = TxDescriptor::Get(tid);
+      auto& tx_desc = GetDesc(tid);
 
       if(tx_desc.open_for_write(addr, sizeof(T))) {
         std::memcpy(addr, &val, sizeof(T));
       } else {
         tx_desc.reset(false);
-        throw std::runtime_error("Store");
+        throw inter_tx_exception("Store", tid, addr);
       }
     }
     static void Abort(int tid) {
-        std::cout << __func__ << std::endl;
-      auto& tx_desc = TxDescriptor::Get(tid);
+      auto& tx_desc = GetDesc(tid);
 
       tx_desc.reset(false);
-      throw std::runtime_error("Explicit");
+      throw inter_tx_exception("Explicit", tid);
     }
     static void* Alloc(int tid, size_t size) {
-      auto& tx_desc = TxDescriptor::Get(tid);
+      auto& tx_desc = GetDesc(tid);
       void* ptr = tx_desc.allocations.Reserve(size);
       if(ptr) {
-        // std::cout << "allocate ["  << ptr << "]" << std::endl;
         tx_desc.allocations.Append(ptr);
       } else {
-        std::cerr << "cannot reserve memory" << std::endl;
-        Abort(tid);
+        tx_desc.reset(false);
+        throw inter_tx_exception("Allocation", tid);
       }
 
       return ptr;
     }
     static void Free(int tid, void* addr) {
-        std::cout << __func__ << std::endl;
-      auto& tx_desc = TxDescriptor::Get(tid);
+      auto& tx_desc = GetDesc(tid);
       tx_desc.frees.Append(addr);
-      if(!tx_desc.open_for_write(addr, sizeof(void*)))
-        Abort(tid);
+      if(!tx_desc.open_for_write(addr, sizeof(void*))) {
+        tx_desc.reset(false);
+        throw inter_tx_exception("Free", tid, addr);
+      }
     }
 };
 
 #define STM_SELF threadID
-#define STM_INIT() 
-#define STM_EXIT() 
+#define STM_INIT(numThreads)  STM::Init(numThreads)
+#define STM_EXIT()            STM::Exit()
+#define STM_THREAD_ENTER()
+#define STM_THREAD_EXIT() 
 #define TxBegin(tid) \
-  for(int __retries = 0; __retries < 10; ) { \
-    int STM_SELF = tid; \
-    TxDescriptor::Get(STM_SELF).depth++; \
+  int STM_SELF = tid; \
+  STM::GetDesc(STM_SELF).depth++; \
+  while(true) { \
+    int __retries = 0; \
     try {
 #define TxCommit() \
-      auto& __desc = TxDescriptor::Get(STM_SELF);\
+      auto& __desc = STM::GetDesc(STM_SELF);\
       if(!--__desc.depth) { \
         if(!__desc.validate())  \
-          throw std::runtime_error("Validate"); \
+          throw inter_tx_exception("Validation", STM_SELF); \
         __desc.reset(true); \
       } \
-      std::cout << "Committed!" << std::endl; \
+      STM::GetDesc(STM_SELF).stats.commits++; \
       break; \
-    } catch(const std::runtime_error& err) {\
+    } catch(const inter_tx_exception& err) {\
       /*...*/ \
-      std::cerr << "Abort : " << err.what() << std::endl; \
+      STM::GetDesc(STM_SELF).stats.aborts++; \
+      if(err.ptr) \
+        fprintf(stderr, "[tid:%d] Abort(%s) Addr : %p\n", err.tid, err.what(), err.ptr); \
+      else \
+        fprintf(stderr, "[tid:%d] Abort(%s)\n", err.tid, err.what()); \
     } \
     __retries++;\
   }
-#define TxAbort() \
-  STM::Abort(STM_SELF)
-#define TxLoad(addr) STM::Load(STM_SELF, addr)
+#define TxAbort()             STM::Abort(STM_SELF)
+#define TxLoad(addr)          STM::Load(STM_SELF, addr)
 #define TxStore(addr, value)  STM::Store(STM_SELF, addr, value)
-#define TxAlloc(size) STM::Alloc(STM_SELF, size)
-#define TxFree(ptr) STM::Free(STM_SELF, ptr)
+#define TxAlloc(size)         STM::Alloc(STM_SELF, size)
+#define TxFree(ptr)           STM::Free(STM_SELF, ptr)
 
 // tl2/stm.h
 #define STM_READ(var)               TxLoad(&(var))
@@ -276,10 +134,10 @@ class STM {
 #define TM_ARGDECL_ALONE    int TM_ARG_ALONE
 #define TM_CALLABLE
 
-#define TM_STARTUP(numThread) STM_INIT()
+#define TM_STARTUP(numThread) STM_INIT(numThread)
 #define TM_SHUTDOWN()         STM_EXIT() 
-#define TM_THREAD_ENTER()
-#define TM_THREAD_EXIT()
+#define TM_THREAD_ENTER()     STM_THREAD_ENTER()
+#define TM_THREAD_EXIT()      STM_THREAD_EXIT() 
 #define P_MALLOC(size) malloc(size)
 #define P_FREE(ptr) free(ptr)
 #define TM_MALLOC(size) TxAlloc(size)

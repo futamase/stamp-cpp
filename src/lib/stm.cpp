@@ -1,5 +1,7 @@
 #include "stm.hpp"
 
+std::vector<TxDescriptor> STM::desc_table;
+
 
 #ifdef STM_TEST 
 int* ptr;

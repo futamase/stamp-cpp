@@ -9,7 +9,7 @@
 # Variables
 # ==============================================================================
 
-CFLAGS   += -I$(STM)  -std=c++17
+CFLAGS   += -I$(STM)  -std=c++17 -DDEBUG
 CPPFLAGS := $(CFLAGS) 
 LDFLAGS  += -L$(STM)
 LIBS     += #-ltl2

@@ -86,15 +86,17 @@ struct RBTree {
     return (ex ? false : true);
   }
   bool Delete(KeyType key) {
-    node* node = LookUp(key);
-    if(node) {
-      node = DeleteNode(node);
-      if(node)
-        ReleaseNode(node);
+    node* n = LookUp(key);
+    if(n) {
+      n = DeleteNode(n);
     }
-    return (node ? true : false);
+    if(n) {
+      // ReleaseNode(n); なぜか失敗する
+      free(n);
+      n = nullptr;
+    }
+    return (n ? true : false);
   }
-
 
   private:
   node* LookUp(const KeyType& key) {
@@ -111,7 +113,7 @@ struct RBTree {
     if(n) {
       FreeNode(n->left);
       FreeNode(n->right);
-      delete n;
+      free(n);
     }
   }
   node* DeleteNode(node* p) {
@@ -154,6 +156,7 @@ struct RBTree {
   }
   void ReleaseNode(node* n) {
     free(n);
+    n = nullptr;
   }
   node* Successor(node* t) {
     if(!t) return nullptr;
@@ -185,8 +188,7 @@ struct RBTree {
           SetColor(y, node::Color::Black);
           SetColor(ParentOf(ParentOf(x)), node::Color::Red);
           x = ParentOf(ParentOf(x));
-        }
-        else {
+        } else {
           if (x == RightOf(ParentOf(x))) {
             x = ParentOf(x);
             RotateLeft(x);
@@ -197,16 +199,14 @@ struct RBTree {
             RotateRight(ParentOf(ParentOf(x)));
           }
         }
-      }
-      else {
+      } else {
         node *y = LeftOf(ParentOf(ParentOf(x)));
         if (IsSameColor(ColorOf(y), node::Color::Red)) {
           SetColor(ParentOf(x), node::Color::Black);
           SetColor(y, node::Color::Black);
           SetColor(ParentOf(ParentOf(x)), node::Color::Red);
           x = ParentOf(ParentOf(x));
-        }
-        else {
+        } else {
           if (x == LeftOf(ParentOf(x))) {
             x = ParentOf(x);
             RotateRight(x);
@@ -221,7 +221,7 @@ struct RBTree {
     }
     node *ro = root; 
     if (!IsSameColor(ro->color, node::Color::Black)) {
-      ro->color = node::Color::Black;
+      SetColor(ro, node::Color::Black);
     }
   }
   void FixAfterDeletion(node* x) {
@@ -238,8 +238,7 @@ struct RBTree {
             IsSameColor(ColorOf(RightOf(sib)), node::Color::Black)) {
           SetColor(sib, node::Color::Red);
           x = ParentOf(x);
-        }
-        else {
+        } else {
           if (IsSameColor(ColorOf(RightOf(sib)), node::Color::Black)) {
             SetColor(LeftOf(sib), node::Color::Black);
             SetColor(sib, node::Color::Red);
@@ -279,6 +278,9 @@ struct RBTree {
         }
       }
     }
+
+    if(x && !IsSameColor(ColorOf(x), node::Color::Black)) 
+      SetColor(x, node::Color::Black);
   }
   void RotateLeft(node* x) {
     node* r = x->right;
