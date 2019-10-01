@@ -12,27 +12,38 @@
 #include "debug_print.hpp"
 
 class LockVar {
-    uintptr_t lock = 0;
+    volatile uintptr_t lock = 0;
     public:
     bool TestWriteBit() const { return (lock & 1); } 
     void SetWriteBit() { lock |= 1; }
-    void ClearWriteBit() { lock &= ~1; }
+    void ClearWriteBit() { lock = (lock & ~1); }
     void ClearWriteBitAndIncTimestamp() { lock = (lock & ~1) + 2; }
 
     int Readers() const { return lock >> 1; }
     void IncReaders() { lock += 2; }
     void DecReaders() { lock -= 2; } 
     uintptr_t WriterID() const { return lock >> 1; }
-
+    // これは正直クソ
     uintptr_t operator*() const { return lock; }
+    int idx = -1;
 };
 class VersionedWriteLock {
-    static const unsigned long TABLE_SIZE = 1 << 20;
+    static const unsigned long TABLE_SIZE = 1UL << 20;
     public:
-    static LockVar& AddrToLockVar(void* addr) {
+    static LockVar& AddrToLockVar(void* addr, bool print=false) {
       static LockVar vars[TABLE_SIZE];
-      int idx = (reinterpret_cast<uintptr_t>(addr) >> 3) & (TABLE_SIZE - 1);
+      int idx = ((reinterpret_cast<uintptr_t>(addr) + 128) >> 3) & (TABLE_SIZE - 1);
+      if(print) {
+        for(size_t i = 0; i < TABLE_SIZE; i++) {
+          if(vars[i].TestWriteBit()) {
+            // std::cout << "Write Bit Is Set!! idx=" << std::hex << i << " val="  << *vars[i] << std::endl;
+          }
+        }
+      }
+      if(vars[idx].idx == -1) vars[idx].idx = idx; // for test
       return vars[idx];
+    }
+    static void PrintWriteBitIsSet() {
     }
 };
 
@@ -41,7 +52,8 @@ static std::mutex meta_mutex;
 
 struct alignas(64) TxDescriptor {
     enum class Type {
-        Read, Write
+        Read = 1, 
+        Write = 2
     };
     struct LogEntry {
         void* addr;
@@ -63,17 +75,26 @@ struct alignas(64) TxDescriptor {
     unsigned depth = 0;
     int my_tid;
 
-    TxDescriptor() : allocations(1 << 5), frees(1 << 5) {}
+    TxDescriptor() 
+      : allocations(1 << 5), frees(1 << 5) 
+    {}
 
+// read after write
+// - set w-bit
+// - read 時には何もしない
+// - validate 時はType==Writeのため素通り
+// write after read
+// - read時にメタデータを保持
+// - write時に
     bool validate() {
       bool success = true;
-      for(auto& entry : dataset) {
+      for(auto&& entry : dataset) {
         auto& meta = VersionedWriteLock::AddrToLockVar(entry.addr);
         {
           std::lock_guard<std::mutex> guard(meta_mutex);
           if(entry.type == Type::Read) {
             if(*meta != entry.old_version) {
-              DEBUG_PRINT("version check failed: addr=%p meta=%ld", entry.addr, *meta);
+              DEBUG_PRINT("version check failed: addr=%p meta=%ld, idx=%x", entry.addr, *meta, ((reinterpret_cast<uintptr_t>(entry.addr)+128) >> 3) & ((1 << 20) - 1));
               success = false;
             }
           }
@@ -92,6 +113,7 @@ struct alignas(64) TxDescriptor {
               } else {
                   if(succeeded) {
                       meta.ClearWriteBitAndIncTimestamp();
+                      // std::cout << "ClearWriteBitAndIncTimestamp called after value=" << *meta << std::endl;
                   } else {
                       memcpy(entry.addr, entry.value, entry.size);
                       meta.ClearWriteBit();
@@ -133,8 +155,8 @@ struct alignas(64) TxDescriptor {
               new_entry.type = Type::Read;
 
               result = true;
-            } else {
-            }
+              // std::cout << "Register in ReadSet [" << addr << "] type(1=R,2=W)=" << (int)dataset.back().type << " meta_idx=" << meta.idx<< std::endl;
+            } 
         }
         return result;
     }
@@ -153,6 +175,7 @@ struct alignas(64) TxDescriptor {
 
             auto& meta = VersionedWriteLock::AddrToLockVar(addr);
 
+            // 誰も書き込んでいない
             if(!meta.TestWriteBit()) 
                 result = true;
 
@@ -172,10 +195,12 @@ struct alignas(64) TxDescriptor {
                   new_entry.addr = addr;
                   new_entry.size = size;
                   std::memcpy(new_entry.value, addr, size);
+                  // std::cout << "Register in WriteSet [" << addr << "] type(1=R 2=W)=" << (int)dataset.back().type << " meta_idx=" << meta.idx << std::endl;
                 } else { // 自身が以前に読み出し，初めて書き込む場合
                   entry->type = Type::Write;
                   entry->size = size;
                   std::memcpy(entry->value, addr, size);
+                  // std::cout << "Register in WriteSet [" << addr << "] type(1=R 2=W)=" << (int)entry->type << " meta_idx=" << meta.idx << std::endl;
                 }
             }
         }

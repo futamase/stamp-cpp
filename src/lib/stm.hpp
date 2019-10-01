@@ -34,8 +34,7 @@ class STM {
         static_assert(std::is_scalar<T>::value == true, "stm_write cannot use non scalar type");
         auto& tx_desc = GetDesc(tid);
 
-        bool success = tx_desc.open_for_read(addr);
-        if(success) {
+        if(tx_desc.open_for_read(addr)) {
           return *addr;
         } else {
           tx_desc.reset(false);
@@ -77,7 +76,7 @@ class STM {
     static void Free(int tid, void* addr) {
       auto& tx_desc = GetDesc(tid);
       tx_desc.frees.Append(addr);
-      if(!tx_desc.open_for_write(addr, sizeof(void*))) {
+      if(!tx_desc.open_for_write(addr, 0)) {
         tx_desc.reset(false);
         throw inter_tx_exception("Free", tid, addr);
       }
@@ -98,9 +97,11 @@ class STM {
 #define TxCommit() \
       auto& __desc = STM::GetDesc(STM_SELF);\
       if(!--__desc.depth) { \
+        VersionedWriteLock::AddrToLockVar(0, true); \
         if(!__desc.validate())  \
           throw inter_tx_exception("Validation", STM_SELF); \
         __desc.reset(true); \
+        std::cout << "Committed" << std::endl; \
       } \
       STM::GetDesc(STM_SELF).stats.commits++; \
       break; \
