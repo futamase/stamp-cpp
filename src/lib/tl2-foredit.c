@@ -613,7 +613,9 @@ void TxStore (Thread* Self, volatile intptr_t* addr, intptr_t valu) {
 
     // 誰かが書いていてそれが自分
     if ((cv & LOCKBIT) && (((AVPair*)(cv ^ LOCKBIT))->Owner == Self)) {
-        cv = ((AVPair*)(cv ^ LOCKBIT))->rdv; // What?
+        // tmpLockentryのrdvは初期化されていない
+        // だからコミットバージョンもおかしい値になる?
+        cv = ((AVPair*)(cv ^ LOCKBIT))->rdv; 
     } else {
         long c = 100; /* TUNABLE */
         AVPair* p = &(Self->tmpLockEntry);
@@ -639,6 +641,8 @@ void TxStore (Thread* Self, volatile intptr_t* addr, intptr_t valu) {
         Self->maxv = cv;
     }
 
+    // ロック取ってる間にWriteSetにエントリ登録してそのエントリのアドレスを再登録
+    // これは排他制御しなくていいの？
     *LockFor = UNS(e) | UNS(LOCKBIT);
 
     *addr = valu;

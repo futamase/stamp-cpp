@@ -2,11 +2,13 @@
 #define TX_DESCRIPTOR
 
 #include <mutex>
+#include <string>
 #include <cstdint>
 #include <cstring>
 #include <unordered_map>
 #include <list>
 #include <algorithm>
+#include <iostream>
 
 #include "tmalloc.hpp"
 #include "debug_print.hpp"
@@ -25,14 +27,15 @@ class LockVar {
     uintptr_t WriterID() const { return lock >> 1; }
     // これは正直クソ
     uintptr_t operator*() const { return lock; }
-    int idx = -1;
+    // for debug
+    int idx = -1; 
 };
 class VersionedWriteLock {
     static const unsigned long TABLE_SIZE = 1UL << 20;
     public:
     static LockVar& AddrToLockVar(void* addr, bool print=false) {
       static LockVar vars[TABLE_SIZE];
-      int idx = ((reinterpret_cast<uintptr_t>(addr) + 128) >> 3) & (TABLE_SIZE - 1);
+      int idx = 0;//((reinterpret_cast<uintptr_t>(addr) + 128) >> 3) & (TABLE_SIZE - 1);
       if(print) {
         for(size_t i = 0; i < TABLE_SIZE; i++) {
           if(vars[i].TestWriteBit()) {
@@ -61,6 +64,10 @@ struct alignas(64) TxDescriptor {
         uintptr_t old_version;
         std::size_t size;
         char value[128];
+        bool ReferToSameMetadata(const LockVar& meta) const {
+          auto& myMeta = VersionedWriteLock::AddrToLockVar(addr);
+          return (&myMeta == &meta); 
+        }
     };
     struct Stats {
       unsigned long commits = 0;
@@ -94,8 +101,14 @@ struct alignas(64) TxDescriptor {
           std::lock_guard<std::mutex> guard(meta_mutex);
           if(entry.type == Type::Read) {
             if(*meta != entry.old_version) {
-              DEBUG_PRINT("version check failed: addr=%p meta=%ld, idx=%x", entry.addr, *meta, ((reinterpret_cast<uintptr_t>(entry.addr)+128) >> 3) & ((1 << 20) - 1));
-              success = false;
+              auto writeEntry = std::find_if(dataset.begin(), dataset.end(),
+                [&meta](const LogEntry& e){ return e.type == Type::Write && e.ReferToSameMetadata(meta); });
+              if(writeEntry != dataset.end()) {
+                //DEBUG_PRINT("Same Meta! %s", "yes");
+              } else {
+                DEBUG_PRINT("version check failed: addr=%p meta=%ld, idx=%x ", entry.addr, *meta, ((reinterpret_cast<uintptr_t>(entry.addr)+128) >> 3) & ((1 << 20) - 1));
+                success = false;
+              }
             }
           }
         } // lock scope
@@ -147,7 +160,11 @@ struct alignas(64) TxDescriptor {
 
             auto& meta = VersionedWriteLock::AddrToLockVar(addr);
 
-            if(!meta.TestWriteBit()) {
+            if(!meta.TestWriteBit() || 
+              std::find_if(dataset.begin(), dataset.end(), 
+                [&meta](const LogEntry& e){ return e.type == Type::Write && e.ReferToSameMetadata(meta); })
+                != dataset.end()
+            ) {
               dataset.emplace_back();
               auto& new_entry = dataset.back();
               new_entry.addr = addr;  
@@ -156,7 +173,8 @@ struct alignas(64) TxDescriptor {
 
               result = true;
               // std::cout << "Register in ReadSet [" << addr << "] type(1=R,2=W)=" << (int)dataset.back().type << " meta_idx=" << meta.idx<< std::endl;
-            } 
+            } else {
+            }
         }
         return result;
     }
@@ -176,13 +194,22 @@ struct alignas(64) TxDescriptor {
             auto& meta = VersionedWriteLock::AddrToLockVar(addr);
 
             // 誰も書き込んでいない
-            if(!meta.TestWriteBit()) 
+            if(!meta.TestWriteBit()) {
                 result = true;
+            } else {
+                // 誰かが書き込んだが、それが自分であった場合
+                // つまり複数の変数を同一のロックで保護するようなもの？
+              auto otherWrite = std::find_if(dataset.begin(), dataset.end(), 
+                [&meta](const LogEntry& e){ return e.type == Type::Write && e.ReferToSameMetadata(meta); });
+              if(otherWrite != dataset.end()) 
+                return true;
+            }
 
             if(result && entry != dataset.end()) {
                 // 自身が以前に読み出したが，他者が書き込んだ
-                if(entry->type == Type::Read && *meta != entry->old_version) 
+                if(entry->type == Type::Read && *meta != entry->old_version) {
                     result = false;
+                }
             }
 
             if(result) {
