@@ -16,7 +16,6 @@ class STM {
     public:
     static TxDescriptor& GetDesc(int tid) {
       auto& e = desc_table[tid];
-      e.my_tid = tid;
       return e;
     }
     static void Init(int numThreads) {
@@ -97,7 +96,6 @@ class STM {
 #define TxCommit() \
       auto& __desc = STM::GetDesc(STM_SELF);\
       if(!--__desc.depth) { \
-        VersionedWriteLock::AddrToLockVar(0, true); \
         if(!__desc.validate())  \
           throw inter_tx_exception("Validation", STM_SELF); \
         __desc.reset(true); \

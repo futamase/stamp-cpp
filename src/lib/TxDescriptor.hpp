@@ -18,7 +18,7 @@ class LockVar {
     public:
     bool TestWriteBit() const { return (lock & 1); } 
     void SetWriteBit() { lock |= 1; }
-    void ClearWriteBit() { lock = (lock & ~1); }
+    void ClearWriteBit() { lock &= ~1); }
     void ClearWriteBitAndIncTimestamp() { lock = (lock & ~1) + 2; }
 
     int Readers() const { return lock >> 1; }
@@ -27,23 +27,15 @@ class LockVar {
     uintptr_t WriterID() const { return lock >> 1; }
     // これは正直クソ
     uintptr_t operator*() const { return lock; }
-    // for debug
-    int idx = -1; 
+    // int idx = -1;  // for test
 };
 class VersionedWriteLock {
     static const unsigned long TABLE_SIZE = 1UL << 20;
     public:
-    static LockVar& AddrToLockVar(void* addr, bool print=false) {
+    static LockVar& AddrToLockVar(void* addr) {
       static LockVar vars[TABLE_SIZE];
-      int idx = 0;//((reinterpret_cast<uintptr_t>(addr) + 128) >> 3) & (TABLE_SIZE - 1);
-      if(print) {
-        for(size_t i = 0; i < TABLE_SIZE; i++) {
-          if(vars[i].TestWriteBit()) {
-            // std::cout << "Write Bit Is Set!! idx=" << std::hex << i << " val="  << *vars[i] << std::endl;
-          }
-        }
-      }
-      if(vars[idx].idx == -1) vars[idx].idx = idx; // for test
+      int idx = ((reinterpret_cast<uintptr_t>(addr) + 128) >> 3) & (TABLE_SIZE - 1);
+      // if(vars[idx].idx == -1) vars[idx].idx = idx; // for test
       return vars[idx];
     }
     static void PrintWriteBitIsSet() {
@@ -77,8 +69,8 @@ struct alignas(64) TxDescriptor {
       }
     } stats;
     // std::list<LogEntry> dataset;
-    std::list<LogEntry> readSet;
-    std::list<LogEntry> writeSet;
+    std::vector<LogEntry> readSet;
+    std::vector<LogEntry> writeSet;
     // std::unordered_map<uintptr_t, LogEntry> dataset;
     TMAllocList allocations, frees;
     unsigned depth = 0;
@@ -86,9 +78,12 @@ struct alignas(64) TxDescriptor {
 
     TxDescriptor() 
       : allocations(1 << 5), frees(1 << 5) 
-    {}
+    {
+      readSet.reserve(4096);
+      writeSet.reserve(1024);
+    }
 
-    bool validate() {
+    bool validate() const {
       bool success = true;
       for(auto&& entry : readSet) {
         auto& meta = VersionedWriteLock::AddrToLockVar(entry.addr);
@@ -98,7 +93,7 @@ struct alignas(64) TxDescriptor {
             auto writeEntry = std::find_if(writeSet.begin(), writeSet.end(),
               [&meta](const LogEntry& e){ return e.ReferToSameMetadata(meta); });
             if(writeEntry != writeSet.end()) {
-              //DEBUG_PRINT("Same Meta! %s", "yes");
+              DEBUG_PRINT("Same Meta! %s", "yes");
             } else {
               DEBUG_PRINT("version check failed: addr=%p meta=%ld, idx=%x ", entry.addr, *meta, ((reinterpret_cast<uintptr_t>(entry.addr)+128) >> 3) & ((1 << 20) - 1));
               success = false;

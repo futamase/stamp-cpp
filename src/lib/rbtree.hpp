@@ -1,9 +1,9 @@
 #ifndef RBTREE_HPP
 #define RBTREE_HPP
 
-#include "stm.hpp"
 #include <functional>
 #include <cassert>
+#include "stm.hpp"
 
 #define TX_LDA(addr)       TxLoad(addr)
 
@@ -41,14 +41,14 @@ struct RBTree {
     //FreeNode(root);
   }
 
-  DataType DECLARE_TMFN(Get, KeyType key) {
+  DataType DECLARE_TMFN(Get, KeyType key) const {
     node* n = CALL_TMFN(Lookup, key); 
     if(n) {
       return TxLoad(&n->data);
     }
     return (DataType)0;
   }
-  bool DECLARE_TMFN(Contains, KeyType key) {
+  bool DECLARE_TMFN(Contains, KeyType key) const {
     node* n = CALL_TMFN(Lookup, key); 
     return n;
   }
@@ -69,14 +69,14 @@ struct RBTree {
     return n;
   }
 
-  DataType Get(KeyType key) {
+  DataType Get(KeyType key) const {
     node* n = LookUp(key);
     if(n) {
       return n->data;
     }
     return (DataType)0;
   }
-  bool Contains(KeyType key) {
+  bool Contains(KeyType key) const {
     return LookUp(key);
   }
   bool Insert(KeyType key, DataType value) {
@@ -99,10 +99,10 @@ struct RBTree {
   }
 
   private:
-  node* LookUp(const KeyType& key) {
+  node* LookUp(const KeyType& key) const {
     node* p = this->root;
     while(p) {
-      auto cmp = key - p->key;
+      KeyType cmp = key - p->key;
       if(cmp == 0) 
         return p;
       p = (cmp < 0 ? p->left : p->right);
@@ -612,18 +612,18 @@ struct RBTree {
       }
     }
   }
-  node* DECLARE_TMFN(ParentOf, node* n) { return (n ? TxLoad(&n->parent) : nullptr); }
-  node* DECLARE_TMFN(LeftOf, node* n) { return (n ? TxLoad(&n->left) : nullptr); }
-  node* DECLARE_TMFN(RightOf, node* n) { return (n ? TxLoad(&n->right) : nullptr); }
-  typename node::Color DECLARE_TMFN(ColorOf, node* n) { return (n ? TxLoad(&n->color) : node::Color::Black); }
+  node* DECLARE_TMFN(ParentOf, node* n) const { return (n ? TxLoad(&n->parent) : nullptr); }
+  node* DECLARE_TMFN(LeftOf, node* n) const { return (n ? TxLoad(&n->left) : nullptr); }
+  node* DECLARE_TMFN(RightOf, node* n) const { return (n ? TxLoad(&n->right) : nullptr); }
+  typename node::Color DECLARE_TMFN(ColorOf, node* n) const { return (n ? TxLoad(&n->color) : node::Color::Black); }
   void DECLARE_TMFN(SetColor, node* n, typename node::Color c) { if(n) TxStore(&n->color, c); }
 
-  node* ParentOf(node* n) { return (n ? n->parent : nullptr); }
-  node* LeftOf(node* n) { return (n ? n->left : nullptr); }
-  node* RightOf(node* n) { return (n ? n->right : nullptr); }
-  typename node::Color ColorOf(node* n) { return (n ? n->color : node::Color::Black); }
+  node* ParentOf(node* n) const { return (n ? n->parent : nullptr); }
+  node* LeftOf(node* n) const { return (n ? n->left : nullptr); }
+  node* RightOf(node* n) const { return (n ? n->right : nullptr); }
+  typename node::Color ColorOf(node* n) const { return (n ? n->color : node::Color::Black); }
   void SetColor(node* n, typename node::Color c) { if(n) n->color = c; }
-  bool IsSameColor(typename node::Color l, typename node::Color r) {
+  bool IsSameColor(typename node::Color l, typename node::Color r) const {
     return static_cast<int>(l) == static_cast<int>(r);
   }
 };
