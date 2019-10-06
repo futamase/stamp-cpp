@@ -104,7 +104,6 @@ class STM {
       } \
       STM::GetDesc(STM_SELF).stats.commits++; \
       if(STM::GetDesc(STM_SELF).stats.commits % 100 == 0) \
-        std::cout<<"num Commits = " << STM::GetDesc(STM_SELF).stats.commits << std::endl;
       break; \
     } catch(const inter_tx_exception& err) {\
       /*...*/ \

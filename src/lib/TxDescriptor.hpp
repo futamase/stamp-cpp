@@ -76,7 +76,9 @@ struct alignas(64) TxDescriptor {
         return " commits:" + std::to_string(commits) + " aborts:" + std::to_string(aborts);
       }
     } stats;
-    std::list<LogEntry> dataset;
+    // std::list<LogEntry> dataset;
+    std::list<LogEntry> readSet;
+    std::list<LogEntry> writeSet;
     // std::unordered_map<uintptr_t, LogEntry> dataset;
     TMAllocList allocations, frees;
     unsigned depth = 0;
@@ -86,29 +88,20 @@ struct alignas(64) TxDescriptor {
       : allocations(1 << 5), frees(1 << 5) 
     {}
 
-// read after write
-// - set w-bit
-// - read 時には何もしない
-// - validate 時はType==Writeのため素通り
-// write after read
-// - read時にメタデータを保持
-// - write時に
     bool validate() {
       bool success = true;
-      for(auto&& entry : dataset) {
+      for(auto&& entry : readSet) {
         auto& meta = VersionedWriteLock::AddrToLockVar(entry.addr);
         {
           std::lock_guard<std::mutex> guard(meta_mutex);
-          if(entry.type == Type::Read) {
-            if(*meta != entry.old_version) {
-              auto writeEntry = std::find_if(dataset.begin(), dataset.end(),
-                [&meta](const LogEntry& e){ return e.type == Type::Write && e.ReferToSameMetadata(meta); });
-              if(writeEntry != dataset.end()) {
-                //DEBUG_PRINT("Same Meta! %s", "yes");
-              } else {
-                DEBUG_PRINT("version check failed: addr=%p meta=%ld, idx=%x ", entry.addr, *meta, ((reinterpret_cast<uintptr_t>(entry.addr)+128) >> 3) & ((1 << 20) - 1));
-                success = false;
-              }
+          if(*meta != entry.old_version) {
+            auto writeEntry = std::find_if(writeSet.begin(), writeSet.end(),
+              [&meta](const LogEntry& e){ return e.ReferToSameMetadata(meta); });
+            if(writeEntry != writeSet.end()) {
+              //DEBUG_PRINT("Same Meta! %s", "yes");
+            } else {
+              DEBUG_PRINT("version check failed: addr=%p meta=%ld, idx=%x ", entry.addr, *meta, ((reinterpret_cast<uintptr_t>(entry.addr)+128) >> 3) & ((1 << 20) - 1));
+              success = false;
             }
           }
         } // lock scope
@@ -119,24 +112,20 @@ struct alignas(64) TxDescriptor {
     void reset(bool succeeded) {
         {
           std::lock_guard<std::mutex> guard(meta_mutex);
-          for(auto& entry : dataset) {
+          for(auto&& entry : writeSet) {
               auto& meta = VersionedWriteLock::AddrToLockVar(entry.addr);
-              if(entry.type == Type::Read) {
-                  // nothing
+              if(succeeded) {
+                  meta.ClearWriteBitAndIncTimestamp();
+                  // std::cout << "ClearWriteBitAndIncTimestamp called after value=" << *meta << std::endl;
               } else {
-                  if(succeeded) {
-                      meta.ClearWriteBitAndIncTimestamp();
-                      // std::cout << "ClearWriteBitAndIncTimestamp called after value=" << *meta << std::endl;
-                  } else {
-                      memcpy(entry.addr, entry.value, entry.size);
-                      meta.ClearWriteBit();
-                  }
+                  memcpy(entry.addr, entry.value, entry.size);
+                  meta.ClearWriteBit();
               }
           }
           if(succeeded) {
             frees.ReleaseAllForward([](void* ptr, size_t size){
-              auto& free_meta = VersionedWriteLock::AddrToLockVar(ptr);
-              free_meta.IncReaders();
+              // auto& free_meta = VersionedWriteLock::AddrToLockVar(ptr);
+              // free_meta.IncReaders();
             });
           } else {
             allocations.ReleaseAllReverse(TMAllocList::visitor_type{});
@@ -144,13 +133,19 @@ struct alignas(64) TxDescriptor {
         }
         frees.clear();
         allocations.clear();
-        dataset.clear();
+        readSet.clear();
+        writeSet.clear();
     }
 
     bool open_for_read(void* addr) {
-        auto entry = std::find_if(dataset.begin(), dataset.end(),
+        auto re = std::find_if(readSet.begin(), readSet.end(),
           [addr](const LogEntry& e){ return e.addr == addr; });
-        if(entry != dataset.end())  {
+        if(re != readSet.end())  {
+            return true;
+        }
+        auto we = std::find_if(writeSet.begin(), writeSet.end(),
+          [addr](const LogEntry& e){ return e.addr == addr; });
+        if(we != writeSet.end())  {
             return true;
         }
 
@@ -161,31 +156,31 @@ struct alignas(64) TxDescriptor {
             auto& meta = VersionedWriteLock::AddrToLockVar(addr);
 
             if(!meta.TestWriteBit() || 
-              std::find_if(dataset.begin(), dataset.end(), 
-                [&meta](const LogEntry& e){ return e.type == Type::Write && e.ReferToSameMetadata(meta); })
-                != dataset.end()
+              std::find_if(writeSet.begin(), writeSet.end(), 
+                [&meta](const LogEntry& e){ return e.ReferToSameMetadata(meta); })
+                != writeSet.end()
             ) {
-              dataset.emplace_back();
-              auto& new_entry = dataset.back();
+              readSet.emplace_back();
+              auto& new_entry = readSet.back();
               new_entry.addr = addr;  
               new_entry.old_version = *meta;
-              new_entry.type = Type::Read;
+              // new_entry.type = Type::Read;
 
               result = true;
               // std::cout << "Register in ReadSet [" << addr << "] type(1=R,2=W)=" << (int)dataset.back().type << " meta_idx=" << meta.idx<< std::endl;
-            } else {
             }
         }
         return result;
     }
     bool open_for_write(void* addr, std::size_t size) {
-        auto entry = std::find_if(dataset.begin(), dataset.end(),
+        auto we = std::find_if(writeSet.begin(), writeSet.end(),
           [addr](const LogEntry& e){ return e.addr == addr; });
-        if(entry != dataset.end()) {
-            if(entry->type == Type::Write) {
-                return true;
-            }
+        if(we != writeSet.end()) {
+          return true;
         }
+
+        auto re = std::find_if(readSet.begin(), readSet.end(),
+          [addr](const LogEntry& e){ return e.addr == addr; });
 
         bool result = false;
         {
@@ -199,15 +194,16 @@ struct alignas(64) TxDescriptor {
             } else {
                 // 誰かが書き込んだが、それが自分であった場合
                 // つまり複数の変数を同一のロックで保護するようなもの？
-              auto otherWrite = std::find_if(dataset.begin(), dataset.end(), 
-                [&meta](const LogEntry& e){ return e.type == Type::Write && e.ReferToSameMetadata(meta); });
-              if(otherWrite != dataset.end()) 
+              auto otherWrite = std::find_if(writeSet.begin(), writeSet.end(), 
+                [&meta](const LogEntry& e){ return e.ReferToSameMetadata(meta); });
+              if(otherWrite != writeSet.end()) 
                 return true;
             }
 
-            if(result && entry != dataset.end()) {
+            if(result && re != readSet.end()) {
                 // 自身が以前に読み出したが，他者が書き込んだ
-                if(entry->type == Type::Read && *meta != entry->old_version) {
+                // (本来ここにあったtype == Readは必要ないだろうがクソ野郎)
+                if(*meta != re->old_version) {
                     result = false;
                 }
             }
@@ -215,20 +211,16 @@ struct alignas(64) TxDescriptor {
             if(result) {
                 meta.SetWriteBit();
 
-                if(entry == dataset.end()) {
-                  dataset.emplace_back();
-                  auto& new_entry = dataset.back();
-                  new_entry.type = Type::Write;
-                  new_entry.addr = addr;
-                  new_entry.size = size;
-                  std::memcpy(new_entry.value, addr, size);
-                  // std::cout << "Register in WriteSet [" << addr << "] type(1=R 2=W)=" << (int)dataset.back().type << " meta_idx=" << meta.idx << std::endl;
-                } else { // 自身が以前に読み出し，初めて書き込む場合
-                  entry->type = Type::Write;
-                  entry->size = size;
-                  std::memcpy(entry->value, addr, size);
-                  // std::cout << "Register in WriteSet [" << addr << "] type(1=R 2=W)=" << (int)entry->type << " meta_idx=" << meta.idx << std::endl;
-                }
+                // ここに到達するパターン
+                // パターン1. 読み出しも書き込みも初めて
+                // パターン2. 読み出ししたが書き込みは初めて
+                writeSet.emplace_back();
+                auto& new_entry = writeSet.back();
+                // new_entry.type = Type::Write;
+                new_entry.addr = addr;
+                new_entry.size = size;
+                std::memcpy(new_entry.value, addr, size);
+                // std::cout << "Register in WriteSet [" << addr << "] type(1=R 2=W)=" << (int)dataset.back().type << " meta_idx=" << meta.idx << std::endl;
             }
         }
         return result;
