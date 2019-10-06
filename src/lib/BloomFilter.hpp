@@ -36,8 +36,8 @@ struct BloomFilter {
     std::vector<bool> bits_;
     uint8_t numHashes_;
 
-    std::array<uint64_t, 2> hash(const KeyType* data,
-                                std::size_t len) {
+    std::array<uint64_t, 2> hash(const Key* data,
+                                std::size_t len) const {
         std::array<uint64_t, 2> hashValue;
         MurmurHash3_x64_128(data, len, 0, hashValue.data());
         
@@ -46,7 +46,7 @@ struct BloomFilter {
     inline uint64_t nthHash(uint8_t n,
                             uint64_t hashA,
                             uint64_t hashB,
-                            uint64_t filterSize) {
+                            uint64_t filterSize) const {
         return (hashA + n * hashB) % filterSize;
     }
 };
