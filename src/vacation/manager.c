@@ -201,7 +201,7 @@ addReservation (TM_ARGDECL  MAP_T* tablePtr, long id, long num, long price)
         if ((long)TM_SHARED_READ(reservationPtr->numTotal) == 0) {
             bool_t status = TMMAP_REMOVE(tablePtr, id);
             if (status == FALSE) {
-                TM_RESTART(__LINE__);
+                TM_RESTART();
             }
             RESERVATION_FREE(reservationPtr);
         } else {
@@ -397,7 +397,7 @@ manager_addCustomer (TM_ARGDECL  manager_t* managerPtr, long customerId)
     assert(customerPtr != NULL);
     status = TMMAP_INSERT(managerPtr->customerTablePtr, customerId, customerPtr);
     if (status == FALSE) {
-        TM_RESTART(__LINE__);
+        TM_RESTART();
     }
 
     return TRUE;
@@ -460,18 +460,18 @@ manager_deleteCustomer (TM_ARGDECL  manager_t* managerPtr, long customerId)
             (reservation_t*)TMMAP_FIND(reservationTables[reservationInfoPtr->type],
                                      reservationInfoPtr->id);
         if (reservationPtr == NULL) {
-            TM_RESTART(__LINE__);
+            TM_RESTART();
         }
         status = RESERVATION_CANCEL(reservationPtr);
         if (status == FALSE) {
-            TM_RESTART(__LINE__);
+            TM_RESTART();
         }
         RESERVATION_INFO_FREE(reservationInfoPtr);
     }
 
     status = TMMAP_REMOVE(managerPtr->customerTablePtr, customerId);
     if (status == FALSE) {
-        TM_RESTART(__LINE__);
+        TM_RESTART();
     }
     CUSTOMER_FREE(customerPtr);
 
@@ -668,7 +668,7 @@ reserve (TM_ARGDECL
         /* Undo previous successful reservation */
         bool_t status = RESERVATION_CANCEL(reservationPtr);
         if (status == FALSE) {
-            TM_RESTART(__LINE__);
+            TM_RESTART();
         }
         return FALSE;
     }
@@ -764,7 +764,7 @@ cancel (TM_ARGDECL
         /* Undo previous successful cancellation */
         bool_t status = RESERVATION_MAKE(reservationPtr);
         if (status == FALSE) {
-            TM_RESTART(__LINE__);
+            TM_RESTART();
         }
         return FALSE;
     }

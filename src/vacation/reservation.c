@@ -144,26 +144,26 @@ checkReservation (TM_ARGDECL  reservation_t* reservationPtr)
 {
     long numUsed = (long)TM_SHARED_READ(reservationPtr->numUsed);
     if (numUsed < 0) {
-        TM_RESTART(__LINE__);
+        TM_RESTART();
     }
     
     long numFree = (long)TM_SHARED_READ(reservationPtr->numFree);
     if (numFree < 0) {
-        TM_RESTART(__LINE__);
+        TM_RESTART();
     }
 
     long numTotal = (long)TM_SHARED_READ(reservationPtr->numTotal);
     if (numTotal < 0) {
-        TM_RESTART(__LINE__);
+        TM_RESTART();
     }
 
     if ((numUsed + numFree) != numTotal) {
-        TM_RESTART(__LINE__);
+        TM_RESTART();
     }
 
     long price = (long)TM_SHARED_READ(reservationPtr->price);
     if (price < 0) {
-        TM_RESTART(__LINE__);
+        TM_RESTART();
     }
 }
 

@@ -208,7 +208,7 @@ customer_removeReservationInfo (TM_ARGDECL
     bool_t status = TMLIST_REMOVE(reservationInfoListPtr,
                                   (void*)&findReservationInfo);
     if (status == FALSE) {
-        TM_RESTART(__LINE__);
+        TM_RESTART();
     }
 
     RESERVATION_INFO_FREE(reservationInfoPtr);

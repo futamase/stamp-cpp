@@ -67,8 +67,18 @@ struct alignas(64) TxDescriptor {
     struct Stats {
       unsigned long commits = 0;
       unsigned long aborts = 0;
+      unsigned long abort_caused_by[AbortStatus::NUM_STATUS] = {};
       std::string concat_all_stats() const {
-        return " commits:" + std::to_string(commits) + " aborts:" + std::to_string(aborts);
+        using std::string;
+        string causes = 
+          string("\n\tAbort Caused by...\n") +
+          string("\tLoad: ") + std::to_string(abort_caused_by[AbortStatus::Load]) +
+          string(", Store: ") + std::to_string(abort_caused_by[AbortStatus::Store]) +
+          string(", Allocation: ") + std::to_string(abort_caused_by[AbortStatus::Allocation]) +
+          string(", Free: ") + std::to_string(abort_caused_by[AbortStatus::Free]) +
+          string(", Validation: ") + std::to_string(abort_caused_by[AbortStatus::Validation]) +
+          string(", Explicit: ") + std::to_string(abort_caused_by[AbortStatus::Explicit]);
+        return " commits:" + std::to_string(commits) + " aborts:" + std::to_string(aborts) + causes;
       }
     } stats;
     TMAllocList allocations, frees;

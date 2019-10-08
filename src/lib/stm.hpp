@@ -36,7 +36,7 @@ class STM {
           return *addr;
         } else {
           // fprintf(stderr, "Aborted by:open_for_read... addr:%p\n", addr);
-          throw inter_tx_exception("Load", tid, addr);
+          throw inter_tx_exception(AbortStatus::Load, tid);
         }
         
         return (T)0;
@@ -48,11 +48,11 @@ class STM {
       if(tx_desc.open_for_write(addr, sizeof(T))) {
         std::memcpy(addr, &val, sizeof(T));
       } else {
-        throw inter_tx_exception("Store", tid, addr);
+        throw inter_tx_exception(AbortStatus::Store, tid);
       }
     }
-    static void Abort(int tid, std::string msg) {
-      throw inter_tx_exception("Explicit " + msg, tid);
+    static void Abort(int tid) {
+      throw inter_tx_exception(AbortStatus::Explicit, tid);
     }
     static void* Alloc(int tid, size_t size) {
       auto& tx_desc = GetDesc(tid);
@@ -60,7 +60,7 @@ class STM {
       if(ptr) {
         tx_desc.allocations.Append(ptr);
       } else {
-        throw inter_tx_exception("Allocation", tid);
+        throw inter_tx_exception(AbortStatus::Allocation, tid);
       }
 
       return ptr;
@@ -69,7 +69,7 @@ class STM {
       auto& tx_desc = GetDesc(tid);
       tx_desc.frees.Append(addr);
       if(!tx_desc.open_for_write(addr, 0)) {
-        throw inter_tx_exception("Free", tid, addr);
+        throw inter_tx_exception(AbortStatus::Free, tid);
       }
     }
 };
@@ -89,24 +89,22 @@ class STM {
       auto& __desc = STM::GetDesc(STM_SELF);\
       if((__desc.depth - 1) == 0) { \
         if(!__desc.validate())  \
-          throw inter_tx_exception("Validation", STM_SELF); \
+          throw inter_tx_exception(AbortStatus::Validation, STM_SELF); \
         __desc.reset(true); \
       } \
       __desc.depth--; \
       __desc.stats.commits++; \
       break; \
     } catch(const inter_tx_exception& err) {\
-      STM::GetDesc(err.tid).reset(false); \
-      STM::GetDesc(err.tid).stats.aborts++; \
-      if(err.ptr) \
-        fprintf(stderr, "[tid:%d] Abort(%s) Addr : %p\n", err.tid, err.what(), err.ptr); \
-      else \
-        fprintf(stderr, "[tid:%d] Abort(%s)\n", err.tid, err.what()); \
+      auto& __desc = STM::GetDesc(err.tid); \
+      __desc.reset(false); \
+      __desc.stats.aborts++; \
+      __desc.stats.abort_caused_by[err.status]++; \
     } \
     STM::GetDesc(STM_SELF).backoff(__retries); \
     __retries++;\
   }
-#define TxAbort(file)             STM::Abort(STM_SELF, std::to_string(file))
+#define TxAbort()             STM::Abort(STM_SELF)
 #define TxLoad(addr)          STM::Load(STM_SELF, addr)
 #define TxStore(addr, value)  STM::Store(STM_SELF, addr, value)
 #define TxAlloc(size)         STM::Alloc(STM_SELF, size)
@@ -138,7 +136,7 @@ class STM {
 #define TM_BEGIN(tid) TxBegin(tid)
 #define TM_BEGIN_RO(tid) TM_BEGIN(tid)
 #define TM_END()      TxCommit()
-#define TM_RESTART(file)  TxAbort(file)
+#define TM_RESTART()  TxAbort()
 
 #define TM_SHARED_READ(var)           TxLoad(&(var))//STM_READ(&(var))
 #define TM_SHARED_READ_P(var_addr)    TxLoad(&(var_addr))//STM_READ_P((var_addr))
