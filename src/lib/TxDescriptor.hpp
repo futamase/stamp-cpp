@@ -9,16 +9,19 @@
 #include <list>
 #include <algorithm>
 #include <iostream>
+#include <random>
 
+#include "BloomFilter.hpp"
 #include "tmalloc.hpp"
 #include "debug_print.hpp"
+#include "tx_exception.hpp"
 
 class LockVar {
     volatile uintptr_t lock = 0;
     public:
     bool TestWriteBit() const { return (lock & 1); } 
     void SetWriteBit() { lock |= 1; }
-    void ClearWriteBit() { lock &= ~1); }
+    void ClearWriteBit() { lock &= ~1; }
     void ClearWriteBitAndIncTimestamp() { lock = (lock & ~1) + 2; }
 
     int Readers() const { return lock >> 1; }
@@ -68,46 +71,61 @@ struct alignas(64) TxDescriptor {
         return " commits:" + std::to_string(commits) + " aborts:" + std::to_string(aborts);
       }
     } stats;
+    TMAllocList allocations, frees;
     // std::list<LogEntry> dataset;
     std::vector<LogEntry> readSet;
     std::vector<LogEntry> writeSet;
+    BloomFilter<uintptr_t> writeSetFilter;
     // std::unordered_map<uintptr_t, LogEntry> dataset;
-    TMAllocList allocations, frees;
     unsigned depth = 0;
     int my_tid;
 
+    // std::random_device rnd_dvc;
+    std::mt19937_64 mt;
+    void backoff(long attempt) {
+      unsigned long long stall = mt() & 0xF;
+      stall += attempt >> 2;
+      stall *= 10;
+      volatile unsigned long long i = 0;
+      while(i < stall) {
+        i++;
+      }
+    }
+
+
     TxDescriptor() 
-      : allocations(1 << 5), frees(1 << 5) 
+      : allocations(1 << 5), frees(1 << 5), writeSetFilter(39260, 6), mt(std::random_device{}())
     {
       readSet.reserve(4096);
       writeSet.reserve(1024);
     }
-
     bool validate() const {
       bool success = true;
-      for(auto&& entry : readSet) {
-        auto& meta = VersionedWriteLock::AddrToLockVar(entry.addr);
-        {
-          std::lock_guard<std::mutex> guard(meta_mutex);
-          if(*meta != entry.old_version) {
-            auto writeEntry = std::find_if(writeSet.begin(), writeSet.end(),
-              [&meta](const LogEntry& e){ return e.ReferToSameMetadata(meta); });
-            if(writeEntry != writeSet.end()) {
-              DEBUG_PRINT("Same Meta! %s", "yes");
-            } else {
-              DEBUG_PRINT("version check failed: addr=%p meta=%ld, idx=%x ", entry.addr, *meta, ((reinterpret_cast<uintptr_t>(entry.addr)+128) >> 3) & ((1 << 20) - 1));
-              success = false;
+      {
+        std::lock_guard<std::mutex> guard(meta_mutex);
+        for(const auto& entry : readSet) {
+          auto& meta = VersionedWriteLock::AddrToLockVar(entry.addr);
+          {
+            if(*meta != entry.old_version) {
+              auto writeEntry = std::find_if(writeSet.begin(), writeSet.end(),
+                [&meta](const LogEntry& e){ return e.ReferToSameMetadata(meta); });
+              if(writeEntry != writeSet.end()) {
+                DEBUG_PRINT("Same Meta! %s", "yes");
+              } else {
+                DEBUG_PRINT("version check failed: addr=%p meta=%ld, idx=%x ", entry.addr, *meta, ((reinterpret_cast<uintptr_t>(entry.addr)+128) >> 3) & ((1 << 20) - 1));
+                success = false;
+              }
             }
-          }
-        } // lock scope
-        if(!success) return false;
-      } // for scope
-      return true;
+          } // lock scope
+          if(!success) break;
+        } // for scope
+      }
+      return success;
     }
     void reset(bool succeeded) {
         {
           std::lock_guard<std::mutex> guard(meta_mutex);
-          for(auto&& entry : writeSet) {
+          for(auto& entry : writeSet) {
               auto& meta = VersionedWriteLock::AddrToLockVar(entry.addr);
               if(succeeded) {
                   meta.ClearWriteBitAndIncTimestamp();
@@ -130,17 +148,20 @@ struct alignas(64) TxDescriptor {
         allocations.clear();
         readSet.clear();
         writeSet.clear();
+        writeSetFilter.Clear();
     }
-
     bool open_for_read(void* addr) {
+        if(writeSetFilter.Contains(reinterpret_cast<uintptr_t>(addr), sizeof(uintptr_t))) {
+            auto we = std::find_if(writeSet.begin(), writeSet.end(),
+              [addr](const LogEntry& e){ return e.addr == addr; });
+            if(we != writeSet.end())  {
+                return true;
+            }
+        }
+
         auto re = std::find_if(readSet.begin(), readSet.end(),
           [addr](const LogEntry& e){ return e.addr == addr; });
         if(re != readSet.end())  {
-            return true;
-        }
-        auto we = std::find_if(writeSet.begin(), writeSet.end(),
-          [addr](const LogEntry& e){ return e.addr == addr; });
-        if(we != writeSet.end())  {
             return true;
         }
 
@@ -168,10 +189,12 @@ struct alignas(64) TxDescriptor {
         return result;
     }
     bool open_for_write(void* addr, std::size_t size) {
-        auto we = std::find_if(writeSet.begin(), writeSet.end(),
-          [addr](const LogEntry& e){ return e.addr == addr; });
-        if(we != writeSet.end()) {
-          return true;
+        if(writeSetFilter.Contains(reinterpret_cast<uintptr_t>(addr), sizeof(uintptr_t))) {
+            auto we = std::find_if(writeSet.begin(), writeSet.end(),
+              [addr](const LogEntry& e){ return e.addr == addr; });
+            if(we != writeSet.end()) {
+              return true;
+            }
         }
 
         auto re = std::find_if(readSet.begin(), readSet.end(),
@@ -216,6 +239,7 @@ struct alignas(64) TxDescriptor {
                 new_entry.size = size;
                 std::memcpy(new_entry.value, addr, size);
                 // std::cout << "Register in WriteSet [" << addr << "] type(1=R 2=W)=" << (int)dataset.back().type << " meta_idx=" << meta.idx << std::endl;
+                writeSetFilter.Add(reinterpret_cast<uintptr_t>(addr), sizeof(uintptr_t));
             }
         }
         return result;

@@ -14,15 +14,19 @@ struct BloomFilter {
     BloomFilter(uint64_t size, uint8_t numHashes)
         : bits_(size), numHashes_(numHashes) 
     {}
-    void Add(const Key* data, std::size_t len) {
-        auto hashValues = hash(data, len);
+    void Clear() {
+        for(auto it = bits_.begin(); it != bits_.end(); ++it) 
+            *it = false;
+    }
+    void Add(const Key& data, std::size_t len) {
+        auto hashValues = hash(&data, len);
 
         for (int n = 0; n < numHashes_; n++) {
             bits_[nthHash(n, hashValues[0], hashValues[1], bits_.size())] = true;
         }
     }
-    bool Contains(const Key* data, std::size_t len) const {
-        auto hashValues = hash(data, len);
+    bool Contains(const Key& data, std::size_t len) const {
+        auto hashValues = hash(&data, len);
         
         for (int n = 0; n < numHashes_; n++) {
             if (!bits_[nthHash(n, hashValues[0], hashValues[1], bits_.size())]) {

@@ -41,14 +41,14 @@ struct RBTree {
     //FreeNode(root);
   }
 
-  DataType DECLARE_TMFN(Get, KeyType key) const {
+  DataType DECLARE_TMFN(Get, KeyType key) {
     node* n = CALL_TMFN(Lookup, key); 
     if(n) {
       return TxLoad(&n->data);
     }
     return (DataType)0;
   }
-  bool DECLARE_TMFN(Contains, KeyType key) const {
+  bool DECLARE_TMFN(Contains, KeyType key) {
     node* n = CALL_TMFN(Lookup, key); 
     return n;
   }
@@ -69,14 +69,14 @@ struct RBTree {
     return n;
   }
 
-  DataType Get(KeyType key) const {
+  DataType Get(KeyType key) {
     node* n = LookUp(key);
     if(n) {
       return n->data;
     }
     return (DataType)0;
   }
-  bool Contains(KeyType key) const {
+  bool Contains(KeyType key) {
     return LookUp(key);
   }
   bool Insert(KeyType key, DataType value) {
@@ -99,7 +99,7 @@ struct RBTree {
   }
 
   private:
-  node* LookUp(const KeyType& key) const {
+  node* LookUp(const KeyType& key) {
     node* p = this->root;
     while(p) {
       KeyType cmp = key - p->key;
@@ -361,7 +361,7 @@ struct RBTree {
   node* DECLARE_TMFN(Lookup, const KeyType& key) {
     node* p = TxLoad(&root); 
     while(p) {
-      auto cmp = key - TxLoad(&p->key);
+      KeyType cmp = key - TxLoad(&p->key);
       if(cmp == 0) 
         return p;
       p = (cmp < 0 ? TxLoad(&p->left) : TxLoad(&p->right));
@@ -435,7 +435,7 @@ struct RBTree {
     TxStore(&x->color, node::Color::Red);
     while(x && x != TxLoad(&this->root)) {
       node* xp = TxLoad(&x->parent);
-      if(!IsSameColor(TxLoad(&xp->color), node::Color::Red))
+      if(!IsSameColor(C_OF(xp), node::Color::Red))
         break;
       if(P_OF(x) == L_OF(P_OF(P_OF(x)))) {
         node* y = R_OF(P_OF(P_OF(x)));
@@ -580,7 +580,7 @@ struct RBTree {
     }
 
     while(true) {
-      auto cmp = key - TxLoad(&t->key);
+      KeyType cmp = key - TxLoad(&t->key);
       if(cmp == 0) {
         return t;
       } else if(cmp < 0) {
@@ -605,7 +605,7 @@ struct RBTree {
           TxStore(&n->key, key);
           TxStore(&n->data, value);
           TxStore(&n->parent, t);
-          TxStore(&t->left, n);
+          TxStore(&t->right, n);
           CALL_TMFN(FixAfterInsertion, n);
           return nullptr;
         }

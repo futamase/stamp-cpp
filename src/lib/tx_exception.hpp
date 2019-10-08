@@ -11,7 +11,7 @@ class inter_tx_exception : public std::runtime_error
     inter_tx_exception(const char* what_arg, int threadID, void* p = nullptr) 
         : runtime_error(what_arg), tid(threadID), ptr(p)
     {}
-    inter_tx_exception(const std::string& what_arg, int threadID, void* p)
+    inter_tx_exception(const std::string& what_arg, int threadID, void* p = nullptr)
         : runtime_error(what_arg), tid(threadID), ptr(p)
     {}
 

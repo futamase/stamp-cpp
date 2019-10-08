@@ -23,7 +23,8 @@ SRCS += \
 	$(LIB)/rbtree.c \
 	$(LIB)/thread.c 
 SRCSCPP += \
-	$(LIB)/stm.cpp
+	$(LIB)/stm.cpp \
+	$(LIB)/MurmurHash3.cpp
 #
 OBJS := ${SRCS:.c=.o} ${SRCSCPP:.cpp=.o}
 
