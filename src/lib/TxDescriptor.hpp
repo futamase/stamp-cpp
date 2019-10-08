@@ -48,6 +48,8 @@ class VersionedWriteLock {
 static std::mutex alloc_lock;
 static std::mutex meta_mutex;
 
+// TMの本質的な問題にReadsetのキャパシティがある
+// Load Store の数を計りたい
 struct alignas(64) TxDescriptor {
     enum class Type {
         Read = 1, 
@@ -67,6 +69,8 @@ struct alignas(64) TxDescriptor {
     struct Stats {
       unsigned long commits = 0;
       unsigned long aborts = 0;
+      unsigned long long loads = 0;
+      unsigned long long stores = 0;
       unsigned long abort_caused_by[AbortStatus::NUM_STATUS] = {};
       std::string concat_all_stats() const {
         using std::string;
@@ -78,7 +82,10 @@ struct alignas(64) TxDescriptor {
           string(", Free: ") + std::to_string(abort_caused_by[AbortStatus::Free]) +
           string(", Validation: ") + std::to_string(abort_caused_by[AbortStatus::Validation]) +
           string(", Explicit: ") + std::to_string(abort_caused_by[AbortStatus::Explicit]);
-        return " commits:" + std::to_string(commits) + " aborts:" + std::to_string(aborts) + causes;
+        string loadsAndStores =
+          string("\n\tNum of Loads: ") + std::to_string(loads) +
+          string("\tNum of Stores: ") + std::to_string(stores);
+        return " commits:" + std::to_string(commits) + " aborts:" + std::to_string(aborts) + causes + loadsAndStores;
       }
     } stats;
     TMAllocList allocations, frees;
@@ -104,7 +111,7 @@ struct alignas(64) TxDescriptor {
 
 
     TxDescriptor() 
-      : allocations(1 << 5), frees(1 << 5), writeSetFilter(39260, 6), mt(std::random_device{}())
+      : allocations(1 << 5), frees(1 << 5), writeSetFilter(39260, 3), mt(std::random_device{}())
     {
       readSet.reserve(4096);
       writeSet.reserve(1024);

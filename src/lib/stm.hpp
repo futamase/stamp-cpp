@@ -33,6 +33,7 @@ class STM {
         auto& tx_desc = GetDesc(tid);
 
         if(tx_desc.open_for_read(addr)) {
+          tx_desc.stats.loads++;
           return *addr;
         } else {
           // fprintf(stderr, "Aborted by:open_for_read... addr:%p\n", addr);
@@ -46,6 +47,7 @@ class STM {
       auto& tx_desc = GetDesc(tid);
 
       if(tx_desc.open_for_write(addr, sizeof(T))) {
+        tx_desc.stats.stores++;
         std::memcpy(addr, &val, sizeof(T));
       } else {
         throw inter_tx_exception(AbortStatus::Store, tid);
