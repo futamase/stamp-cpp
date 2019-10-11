@@ -5,13 +5,13 @@
 # ==============================================================================
 
 
-CC       := gcc
+CC       := upcxx
 CFLAGS   += -Wall -pthread 
 CFLAGS   += -O3 
 CFLAGS   += -I$(LIB)
-CPP      := g++
-CPPFLAGS += $(CFLAGS)
-LD       := g++
+CPP      := upcxx
+#CPPFLAGS += $(CFLAGS)
+LD       := upcxx
 LIBS     += -lpthread
 
 # Remove these files when doing clean

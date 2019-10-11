@@ -20,11 +20,11 @@ SRCS += \
 	$(LIB)/pair.c \
 	$(LIB)/mt19937ar.c \
 	$(LIB)/random.c \
-	$(LIB)/rbtree.c \
 	$(LIB)/thread.c 
 SRCSCPP += \
 	$(LIB)/stm.cpp \
-	$(LIB)/MurmurHash3.cpp
+	$(LIB)/MurmurHash3.cpp \
+	$(LIB)/rbtree.cpp \
 #
 OBJS := ${SRCS:.c=.o} ${SRCSCPP:.cpp=.o}
 

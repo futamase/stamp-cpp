@@ -1,0 +1,59 @@
+TARGET = test#vacation
+
+BUILD_DIR ?= ./build
+SRC_DIR ?= 
+
+SUFFIX = .cpp .c
+
+#SRCS := $(shell find $(SRC_DIRS) -name *.cpp -or -name *.c)
+#OBJS := $(SRCS:%=$(BUILD_DIR)/$(basename %).o)
+#DEPS := $(OBJS:.o=.d)
+
+LIB :=  ../lib
+
+SRCS := client.c \
+	customer.c \
+	manager.c \
+	reservation.c \
+	vacation.c \
+	$(LIB)/list.c \
+	$(LIB)/pair.c \
+	$(LIB)/mt19937ar.c \
+	$(LIB)/random.c \
+	$(LIB)/thread.c \
+	$(LIB)/stm.cpp \
+	$(LIB)/MurmurHash3.cpp \
+	$(LIB)/rbtree.cpp 
+	
+OBJS := $(addsuffix .o, $(basename $(SRCS))) #main.o h1.o
+
+INC_DIRS += $(LIB)
+
+CC = upcxx
+CXX = upcxx
+CFLAGS += -I$(LIB)
+CXXFLAGS += $(CFLAGS)
+
+
+# target exec
+$(BUILD_DIR)/$(TARGET): $(BUILD_DIR)/$(OBJS)
+	echo $(OBJS)
+	$(CXX) $(OBJS) -o $@ $(LDFLAGS)
+
+# C source
+$(BUILD_DIR)/%.o: %.c
+	mkdir -p $(BUILD_DIR)
+	$(CC) $(CFLAGS) -c $< 
+
+# c++ source
+$(BUILD_DIR)/%.o: %.cpp
+	mkdir -p $(BUILD_DIR)
+	$(CXX) $(CXXFLAGS) -c $<
+
+
+.PHONY: clean
+
+clean:
+	rm -r $(BUILD_DIR)
+	rm $(OBJS)
+

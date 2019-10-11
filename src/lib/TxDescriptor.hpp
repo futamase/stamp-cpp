@@ -11,6 +11,8 @@
 #include <iostream>
 #include <random>
 
+#include <upcxx/upcxx.hpp>
+
 #include "BloomFilter.hpp"
 #include "tmalloc.hpp"
 #include "debug_print.hpp"

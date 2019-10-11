@@ -7,10 +7,12 @@
 #include <unordered_map>
 #include <list>
 #include <stdexcept>
+#include <upcxx/upcxx.hpp>
 
 #include "TxDescriptor.hpp"
 #include "tx_exception.hpp"
 
+// STMはDTMの1プロセスのみ版という設計方針
 class STM {
     static std::vector<TxDescriptor> desc_table;
     public:
@@ -18,11 +20,15 @@ class STM {
       return desc_table[tid];
     }
     static void Init(int numThreads) {
+      upcxx::init();
+
       desc_table.resize(numThreads);
       for(size_t tid = 0; tid < desc_table.size(); tid++)
         desc_table[tid].my_tid = tid;
     }
     static void Exit() {
+      upcxx::finalize();
+
       for(size_t tid = 0; tid < desc_table.size(); tid++) {
         fprintf(stderr, "stats[tid:%ld] %s\n", tid, desc_table[tid].stats.concat_all_stats().c_str());
       }
