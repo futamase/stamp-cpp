@@ -23,6 +23,7 @@ SRCS += \
 	$(LIB)/thread.c 
 SRCSCPP += \
 	$(LIB)/stm.cpp \
+	$(LIB)/dtm.cpp \ 
 	$(LIB)/MurmurHash3.cpp \
 	$(LIB)/rbtree.cpp \
 #

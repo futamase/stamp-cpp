@@ -1,5 +1,5 @@
-#ifndef TX_DESCRIPTOR
-#define TX_DESCRIPTOR
+#ifndef TX_DESCRIPTOR_HPP
+#define TX_DESCRIPTOR_HPP
 
 #include <mutex>
 #include <string>
@@ -10,8 +10,6 @@
 #include <algorithm>
 #include <iostream>
 #include <random>
-
-#include <upcxx/upcxx.hpp>
 
 #include "BloomFilter.hpp"
 #include "tmalloc.hpp"
