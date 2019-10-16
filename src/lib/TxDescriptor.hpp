@@ -49,36 +49,64 @@ static std::mutex alloc_lock;
 static std::mutex meta_mutex;
 
 struct alignas(64) TxDescriptor {
-    enum class Type {
+    enum class Type : char {
         Read = 1, 
         Write = 2
     };
     struct LogEntry {
-        void* addr;
-        Type type;
-        uintptr_t old_version;
-        std::size_t size;
-        char value[128];
+        void* addr; // 8B
+        union {
+          uintptr_t old_version;
+          struct {
+            std::size_t size;
+            char value[64];
+          };
+        };
+        LogEntry(void* _addr, uintptr_t oldv) 
+          : addr(_addr), old_version(oldv) 
+        {}
+        LogEntry(void* _addr, std::size_t _size, void* data) 
+          : addr(_addr), size(_size)
+        {
+          memcpy(value, data, size);
+        }
         bool ReferToSameMetadata(const LockVar& meta) const {
-          auto& myMeta = VersionedWriteLock::AddrToLockVar(addr);
-          return (&myMeta == &meta); 
+          return (&VersionedWriteLock::AddrToLockVar(addr) == &meta);
         }
     };
     struct Stats {
       unsigned long commits = 0;
       unsigned long aborts = 0;
       unsigned long abort_caused_by[AbortStatus::NUM_STATUS] = {};
+      unsigned long loads = 0;
+      unsigned long stores = 0;
+      double ave_loads_per_tx = 0;
+      double ave_stores_per_tx = 0;
+      std::pair<unsigned long, double> ave_readset = {0, 0};
+      std::pair<unsigned long, double> ave_writeset = {0,0};
       std::string concat_all_stats() const {
-        using std::string;
+        using namespace std;
+
         string causes = 
           string("\n\tAbort Caused by...\n") +
-          string("\tLoad: ") + std::to_string(abort_caused_by[AbortStatus::Load]) +
-          string(", Store: ") + std::to_string(abort_caused_by[AbortStatus::Store]) +
-          string(", Allocation: ") + std::to_string(abort_caused_by[AbortStatus::Allocation]) +
-          string(", Free: ") + std::to_string(abort_caused_by[AbortStatus::Free]) +
-          string(", Validation: ") + std::to_string(abort_caused_by[AbortStatus::Validation]) +
-          string(", Explicit: ") + std::to_string(abort_caused_by[AbortStatus::Explicit]);
-        return " commits:" + std::to_string(commits) + " aborts:" + std::to_string(aborts) + causes;
+          string("\tLoad: ") + to_string(abort_caused_by[AbortStatus::Load]) +
+          string(", Store: ") + to_string(abort_caused_by[AbortStatus::Store]) +
+          string(", Allocation: ") + to_string(abort_caused_by[AbortStatus::Allocation]) +
+          string(", Free: ") + to_string(abort_caused_by[AbortStatus::Free]) +
+          string(", Validation: ") + to_string(abort_caused_by[AbortStatus::Validation]) +
+          string(", Explicit: ") + to_string(abort_caused_by[AbortStatus::Explicit]);
+        
+        string readwrite = 
+          string("\n\tReadSet average) :") + to_string(ave_readset.second) +
+          string("\n\tWriteSet average) :") + to_string(ave_writeset.second); 
+
+        string loadstore = 
+          string("\n\tLoad: ") + to_string(loads) + 
+          string("\tStore: ") + to_string(stores) +
+          string("\tLoad per tx (average): ") + to_string(ave_loads_per_tx) + 
+          string("\tStore per tx (average): ") + to_string(ave_stores_per_tx);
+
+        return " commits:" + to_string(commits) + " aborts:" + to_string(aborts) + causes + loadstore + readwrite;
       }
     } stats;
     TMAllocList allocations, frees;
@@ -86,6 +114,7 @@ struct alignas(64) TxDescriptor {
     std::vector<LogEntry> readSet;
     std::vector<LogEntry> writeSet;
     BloomFilter<uintptr_t> writeSetFilter;
+    BloomFilter<uintptr_t> readSetFilter;
     // std::unordered_map<uintptr_t, LogEntry> dataset;
     unsigned depth = 0;
     int my_tid;
@@ -93,7 +122,7 @@ struct alignas(64) TxDescriptor {
     // std::random_device rnd_dvc;
     std::mt19937_64 mt;
     void backoff(long attempt) {
-      unsigned long long stall = mt() & 0xF;
+      unsigned long long stall = mt() & 0xFF;
       stall += attempt >> 2;
       stall *= 10;
       volatile unsigned long long i = 0;
@@ -104,9 +133,9 @@ struct alignas(64) TxDescriptor {
 
 
     TxDescriptor() 
-      : allocations(1 << 5), frees(1 << 5), writeSetFilter(39260, 6), mt(std::random_device{}())
+      : allocations(1 << 5), frees(1 << 5), writeSetFilter(39260, 6), readSetFilter(39260, 6), mt(std::random_device{}())
     {
-      readSet.reserve(4096);
+      readSet.reserve(8192);
       writeSet.reserve(1024);
     }
     bool validate() const {
@@ -150,6 +179,10 @@ struct alignas(64) TxDescriptor {
               // auto& free_meta = VersionedWriteLock::AddrToLockVar(ptr);
               // free_meta.IncReaders();
             });
+            stats.ave_readset.second = (double)(stats.ave_readset.first + readSet.size()) / (stats.commits+1);
+            stats.ave_readset.first += readSet.size();
+            stats.ave_writeset.second = (double)(stats.ave_writeset.first + writeSet.size()) / (stats.commits+1);
+            stats.ave_writeset.first += writeSet.size();
           } else {
             allocations.ReleaseAllReverse(TMAllocList::visitor_type{});
           }
@@ -158,22 +191,24 @@ struct alignas(64) TxDescriptor {
         allocations.clear();
         readSet.clear();
         writeSet.clear();
-        writeSetFilter.Clear();
+//        writeSetFilter.Clear();
+//        readSetFilter.Clear();
     }
     bool open_for_read(void* addr) {
-        if(writeSetFilter.Contains(reinterpret_cast<uintptr_t>(addr), sizeof(uintptr_t))) {
-            auto we = std::find_if(writeSet.begin(), writeSet.end(),
-              [addr](const LogEntry& e){ return e.addr == addr; });
-            if(we != writeSet.end())  {
+//        if(readSetFilter.Contains(reinterpret_cast<uintptr_t>(addr), sizeof(uintptr_t))) {
+          if(std::find_if(readSet.rbegin(), readSet.rend(),
+            [addr](const LogEntry& e){ return e.addr == addr; }) != readSet.rend()) {
+              return true;
+          }
+//        }
+//
+//        if(writeSetFilter.Contains(reinterpret_cast<uintptr_t>(addr), sizeof(uintptr_t))) {
+            if(std::find_if(writeSet.rbegin(), writeSet.rend(),
+              [addr](decltype(writeSet)::const_reference e){ return e.addr == addr; }) != writeSet.rend()) {
                 return true;
             }
-        }
+ //       }
 
-        auto re = std::find_if(readSet.begin(), readSet.end(),
-          [addr](const LogEntry& e){ return e.addr == addr; });
-        if(re != readSet.end())  {
-            return true;
-        }
 
         bool result = false; 
         {
@@ -182,30 +217,26 @@ struct alignas(64) TxDescriptor {
             auto& meta = VersionedWriteLock::AddrToLockVar(addr);
 
             if(!meta.TestWriteBit() || 
-              std::find_if(writeSet.begin(), writeSet.end(), 
+              std::find_if(writeSet.rbegin(), writeSet.rend(), 
                 [&meta](const LogEntry& e){ return e.ReferToSameMetadata(meta); })
-                != writeSet.end()
+                != writeSet.rend()
             ) {
-              readSet.emplace_back();
-              auto& new_entry = readSet.back();
-              new_entry.addr = addr;  
-              new_entry.old_version = *meta;
-              // new_entry.type = Type::Read;
+              readSet.emplace_back(addr, *meta);
 
               result = true;
-              // std::cout << "Register in ReadSet [" << addr << "] type(1=R,2=W)=" << (int)dataset.back().type << " meta_idx=" << meta.idx<< std::endl;
+//              readSetFilter.Add(reinterpret_cast<uintptr_t>(addr), sizeof(uintptr_t));
             }
         }
         return result;
     }
     bool open_for_write(void* addr, std::size_t size) {
-        if(writeSetFilter.Contains(reinterpret_cast<uintptr_t>(addr), sizeof(uintptr_t))) {
+//        if(writeSetFilter.Contains(reinterpret_cast<uintptr_t>(addr), sizeof(uintptr_t))) {
             auto we = std::find_if(writeSet.begin(), writeSet.end(),
               [addr](const LogEntry& e){ return e.addr == addr; });
             if(we != writeSet.end()) {
               return true;
             }
-        }
+//        }
 
         auto re = std::find_if(readSet.begin(), readSet.end(),
           [addr](const LogEntry& e){ return e.addr == addr; });
@@ -242,14 +273,8 @@ struct alignas(64) TxDescriptor {
                 // ここに到達するパターン
                 // パターン1. 読み出しも書き込みも初めて
                 // パターン2. 読み出ししたが書き込みは初めて
-                writeSet.emplace_back();
-                auto& new_entry = writeSet.back();
-                // new_entry.type = Type::Write;
-                new_entry.addr = addr;
-                new_entry.size = size;
-                std::memcpy(new_entry.value, addr, size);
-                // std::cout << "Register in WriteSet [" << addr << "] type(1=R 2=W)=" << (int)dataset.back().type << " meta_idx=" << meta.idx << std::endl;
-                writeSetFilter.Add(reinterpret_cast<uintptr_t>(addr), sizeof(uintptr_t));
+                writeSet.emplace_back(addr, size, addr);
+//                writeSetFilter.Add(reinterpret_cast<uintptr_t>(addr), sizeof(uintptr_t));
             }
         }
         return result;

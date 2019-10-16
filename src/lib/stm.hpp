@@ -33,6 +33,7 @@ class STM {
         auto& tx_desc = GetDesc(tid);
 
         if(tx_desc.open_for_read(addr)) {
+          tx_desc.stats.loads++;
           return *addr;
         } else {
           // fprintf(stderr, "Aborted by:open_for_read... addr:%p\n", addr);
@@ -46,6 +47,7 @@ class STM {
       auto& tx_desc = GetDesc(tid);
 
       if(tx_desc.open_for_write(addr, sizeof(T))) {
+        tx_desc.stats.stores++;
         std::memcpy(addr, &val, sizeof(T));
       } else {
         throw inter_tx_exception(AbortStatus::Store, tid);
@@ -84,6 +86,8 @@ class STM {
   STM::GetDesc(STM_SELF).depth++; \
   while(true) { \
     int __retries = 0; \
+    unsigned long ___loads = STM::GetDesc(STM_SELF).stats.loads; \
+    unsigned long ___stores = STM::GetDesc(STM_SELF).stats.stores; \
     try {
 #define TxCommit() \
       auto& __desc = STM::GetDesc(STM_SELF);\
@@ -91,15 +95,18 @@ class STM {
         if(!__desc.validate())  \
           throw inter_tx_exception(AbortStatus::Validation, STM_SELF); \
         __desc.reset(true); \
+        __desc.stats.commits++; \
+        __desc.stats.ave_loads_per_tx = (double)(__desc.stats.loads + (__desc.stats.loads - ___loads)) / (double)__desc.stats.commits; \
+        __desc.stats.ave_stores_per_tx = (double)(__desc.stats.stores + (__desc.stats.stores - ___stores)) / (double)__desc.stats.commits; \
       } \
       __desc.depth--; \
-      __desc.stats.commits++; \
       break; \
     } catch(const inter_tx_exception& err) {\
       auto& __desc = STM::GetDesc(err.tid); \
       __desc.reset(false); \
-      __desc.stats.aborts++; \
-      __desc.stats.abort_caused_by[err.status]++; \
+      STM::GetDesc(STM_SELF).stats.loads = ___loads; \
+      STM::GetDesc(STM_SELF).stats.stores = ___stores; \
+      STM::GetDesc(STM_SELF).stats.aborts++; \
     } \
     STM::GetDesc(STM_SELF).backoff(__retries); \
     __retries++;\
