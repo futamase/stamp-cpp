@@ -209,7 +209,6 @@ struct alignas(64) TxDescriptor {
             }
  //       }
 
-
         bool result = false; 
         {
             std::lock_guard<std::mutex> guard(meta_mutex);
@@ -259,15 +258,14 @@ struct alignas(64) TxDescriptor {
                 return true;
             }
 
-            if(result && re != readSet.end()) {
+            if(result) {
+              if(re != readSet.end()) {
                 // 自身が以前に読み出したが，他者が書き込んだ
                 // (本来ここにあったtype == Readは必要ないだろうがクソ野郎)
                 if(*meta != re->old_version) {
                     result = false;
                 }
-            }
-
-            if(result) {
+              }
                 meta.SetWriteBit();
 
                 // ここに到達するパターン
