@@ -51,43 +51,60 @@ class DTM {
       upcxx::finalize();
     }
     template<typename T>
-    static T Load(int pid, int tid, T* addr) {
+    static T Load(T* addr) {
     }
+    template<typename T>
+    static T Load(upcxx::global_ptr<T> ptr) {
+      if(ptr.is_local()) {
+        return Load(ptr.local());
+      } else {
+        upcxx::rpc(ptr.where(), [](dist_par_vecupcxx::global_ptr<T> p)) {
+
+          try {
+
+          } catch(const inter_tx_exception& e) {
+
+          }
+        }
+      }
+    }
+
+
+   // SFINAE よりもスマートだろうがバカ
+   template<class Fn, class ...TArgs, class Ret = typename std::invoke_result<Fn, TArgs...>::type>
+   Ret InvokeOn(int rank, int tid, Fn fn, TArgs&&... args) {
+     if constexpr (std::is_same<Ret, void>::value) {
+       if(rank == upcxx::rank_me()) {
+         fn(std::forward<TArgs>(args)...);
+       } else {
+         upcxx::rpc(rank, [](dist_par_vec& d, int src_pid, int src_tid, TArgs&... args) -> bool {
+           try {
+             fn(std::forward<TArgs>(args)...);
+             return true;
+           } catch(const inter_tx_exception& e) {
+             auto& desc = d->at(src_pid).at(src_tid);
+             desc.reset(false);
+             return false;
+           }
+         }, dist_desc_table, upcxx::rank_me(), tid, args...);
+       }
+     } else { /*fnの戻り値がvoidではない*/
+      //  if(rank == upcxx::rank_me()) {
+      //    return fn(std::forward<TArgs>(args)...);
+      //  } else {
+      //    upcxx::rpc(rank, [](){
+      //      fn()
+      //    }, /**/);
+      //  }
+     }
+   }
 };
 
-// template<class Key, class Data>
-// class drbt {
-//   using rbt_t = RBTree<Key, Data>;
-//   using drbt_t = upcxx::dist_object<rbt_t>;
-//   drbt_t rbt;
-//   // SFINAE よりもスマートだろうがバカ
-//   template<class Fn, class ...TArgs, class Ret = typename std::invoke_result<Fn, TArgs...>::type>
-//   Ret InvokeOn(int rank, Fn fn, TArgs&&... args) {
-    // if constexpr (std::is_same<Ret, void>::value) {
-    //   if(rank == upcxx::rank_me()) {
-    //     fn(std::forward<TArgs>(args)...);
-    //   } else {
-    //     upcxx::rpc(rank, []() -> bool {
-    //       try {
-    //         fn(std::forward<TArgs>(args)...);
-    //         return true;
-    //       } catch(const inter_tx_exception& e) {
-    //         auto& desc = DTM::GetDesc(src_pid, src_tid);
-    //         desc.reset(false);
-    //         return false;
-    //       }
-    //     });
-    //   }
-    // } else { /*fnの戻り値がvoidではない*/
-    //   if(rank == upcxx::rank_me()) {
-    //     return fn(std::forward<TArgs>(args)...);
-    //   } else {
-    //     upcxx::rpc(rank, [](){
-    //       fn()
-    //     }, /**/);
-    //   }
-    // }
-  // }
+//  template<class Key, class Data>
+//  class drbt {
+//    using rbt_t = RBTree<Key, Data>;
+//    using drbt_t = upcxx::dist_object<rbt_t>;
+//    drbt_t rbt;
   //auto fn = std::bind(&rbt_t::TxGet, )
   // Data TxGet(int tid, Key key){
   //   auto pid = get_target_rank(key);
